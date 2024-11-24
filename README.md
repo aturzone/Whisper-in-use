@@ -1,87 +1,159 @@
 
-# راهنمای مرحله‌به‌مرحله نصب و استفاده از Whisper
+# افزودن قابلیت تبدیل ویس به متن با استفاده از OpenAI Whisper
 
-## **مرحله 1: نصب پیش‌نیازها**
-1. اطمینان حاصل کنید که Python نسخه 3.8 یا بالاتر روی سیستم شما نصب است.
-   - برای بررسی:
-     ```bash
-     python --version
-     ```
-   - اگر نصب نیست، می‌توانید از وب‌سایت [Python](https://www.python.org) دانلود و نصب کنید.
-
-2. مطمئن شوید pip (مدیر بسته‌های Python) نصب شده است.
-   - برای بررسی:
-     ```bash
-     pip --version
-     ```
+در این مستند دو روش برای اضافه کردن قابلیت پردازش ویس توضیح داده شده است: 
+۱. **استفاده از فانکشن‌ها در Assistant Playground**  
+۲. **بدون استفاده از فانکشن‌ها**  
 
 ---
 
-## **مرحله 2: نصب Whisper**
-1. ابتدا PyTorch را نصب کنید (Whisper برای پردازش از PyTorch استفاده می‌کند).
-   - اگر از **GPU** استفاده می‌کنید، دستور نصب PyTorch متناسب با سیستم شما متفاوت است. بهترین راه، مراجعه به [صفحه رسمی PyTorch](https://pytorch.org/get-started/locally/) است.
-   - برای نصب نسخه عمومی CPU/GPU (مثال):
-     ```bash
-     pip install torch torchvision torchaudio
-     ```
+## روش اول: استفاده از فانکشن‌ها در Assistant Playground
 
-2. سپس، Whisper را نصب کنید:
-   ```bash
-   pip install git+https://github.com/openai/whisper.git
-   ```
+### مرحله ۱: تعریف فانکشن در Playground
+۱. وارد محیط **Assistant Playground** شوید.  
+۲. فانکشن زیر را برای پردازش فایل صوتی تعریف کنید:
+```json
+{
+  "name": "process_audio",
+  "description": "Convert an audio file to text and get an AI response",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "audio_url": {
+        "type": "string",
+        "description": "URL of the audio file to process"
+      }
+    },
+    "required": ["audio_url"]
+  }
+}
+```
 
-3. ممکن است به ابزارهای FFMPEG نیاز داشته باشید:
-   - برای نصب در ویندوز:
-     - از [ffmpeg.org](https://ffmpeg.org/download.html) دانلود و نصب کنید.
-   - یا با دستور زیر (در سیستم‌های لینوکس/مک):
-     ```bash
-     sudo apt update && sudo apt install ffmpeg
-     ```
+### مرحله ۲: طراحی سرور برای پردازش ویس
+یک سرور Flask طراحی کنید که فایل صوتی را دریافت کرده، متن آن را استخراج و پاسخ هوش مصنوعی را تولید کند:
+
+```python
+from flask import Flask, request, jsonify
+import whisper
+import openai
+import os
+
+app = Flask(__name__)
+openai.api_key = "YOUR_OPENAI_API_KEY"
+whisper_model = whisper.load_model("base")
+
+@app.route('/process_audio', methods=['POST'])
+def process_audio():
+    data = request.json
+    audio_url = data.get('audio_url')
+    if not audio_url:
+        return jsonify({"error": "No audio URL provided"}), 400
+
+    temp_path = "temp_audio.wav"
+    os.system(f"wget {audio_url} -O {temp_path}")
+
+    try:
+        transcription = whisper_model.transcribe(temp_path, language="fa")
+        user_text = transcription['text']
+    except Exception as e:
+        os.remove(temp_path)
+        return jsonify({"error": f"Whisper error: {e}"}), 500
+    finally:
+        os.remove(temp_path)
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_text}]
+        )
+        ai_text = response['choices'][0]['message']['content']
+    except Exception as e:
+        return jsonify({"error": f"OpenAI error: {e}"}), 500
+
+    return jsonify({
+        "user_text": user_text,
+        "ai_response": ai_text
+    })
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
+```
+
+### مرحله ۳: اتصال فانکشن به سرور
+۱. فانکشن `process_audio` را با کلاینت خود (مثلاً وب یا اپلیکیشن موبایل) تست کنید.  
+۲. فایل صوتی را به آدرس سرور ارسال کنید و پاسخ متنی را دریافت کنید.
 
 ---
 
-## **مرحله 3: آزمایش نصب**
-1. مطمئن شوید که نصب موفقیت‌آمیز بوده است:
-   ```bash
-   whisper --help
-   ```
-   این دستور باید اطلاعات مربوط به نحوه استفاده از Whisper را نمایش دهد.
+## روش دوم: بدون استفاده از فانکشن‌ها
+
+### مرحله ۱: طراحی سرور برای پردازش ویس
+یک سرور Flask برای دریافت فایل صوتی، تبدیل آن به متن و تولید پاسخ طراحی کنید:
+
+```python
+from flask import Flask, request, jsonify
+import whisper
+import openai
+import os
+
+app = Flask(__name__)
+openai.api_key = "YOUR_OPENAI_API_KEY"
+whisper_model = whisper.load_model("base")
+
+@app.route('/process_audio', methods=['POST'])
+def process_audio():
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({"error": "No audio file provided."}), 400
+
+    temp_path = "temp_audio.wav"
+    audio_file.save(temp_path)
+
+    try:
+        transcription = whisper_model.transcribe(temp_path, language="fa")
+        user_text = transcription['text']
+    except Exception as e:
+        os.remove(temp_path)
+        return jsonify({"error": f"Whisper error: {e}"}), 500
+    finally:
+        os.remove(temp_path)
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_text}]
+        )
+        ai_text = response['choices'][0]['message']['content']
+    except Exception as e:
+        return jsonify({"error": f"OpenAI error: {e}"}), 500
+
+    return jsonify({
+        "user_text": user_text,
+        "ai_response": ai_text
+    })
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
+```
+
+### مرحله ۲: ارسال ویس به سرور
+۱. از ابزارهای HTTP (مثل Postman) برای ارسال درخواست `POST` استفاده کنید.  
+۲. فایل صوتی را با پارامتر `audio` ارسال کنید:
+```bash
+curl -X POST -F "audio=@your_audio_file.wav" http://127.0.0.1:5000/process_audio
+```
+
+### مرحله ۳: نمایش پاسخ
+پاسخ دریافتی شامل متن تبدیل‌شده و پاسخ هوش مصنوعی است:
+```json
+{
+  "user_text": "متن تبدیل‌شده از ویس",
+  "ai_response": "پاسخ تولیدشده توسط هوش مصنوعی"
+}
+```
 
 ---
 
-## **مرحله 4: استفاده از Whisper**
-برای اجرای یک فایل صوتی و تبدیل آن به متن:
-1. فایل صوتی را آماده کنید (فرمت‌هایی مثل MP3 یا WAV).
-2. دستور زیر را اجرا کنید:
-   ```bash
-   whisper your_audio_file.mp3 --language fa
-   ```
-   - `your_audio_file.mp3`: مسیر فایل صوتی شما.
-   - `--language fa`: اگر فایل صوتی فارسی است، زبان را مشخص کنید.
-
-3. خروجی مدل (متن تبدیل‌شده) در کنسول نمایش داده می‌شود.
-
----
-
-## **مرحله 5: استفاده در کد Python**
-برای استفاده در پروژه Python:
-1. یک فایل Python ایجاد کنید و کد زیر را وارد کنید:
-   ```python
-   import whisper
-
-   # مدل را بارگیری کنید
-   model = whisper.load_model("base")  # مدل‌های دیگر: "small", "medium", "large"
-   
-   # فایل صوتی را پردازش کنید
-   result = model.transcribe("your_audio_file.mp3", language="fa")
-
-   # نمایش متن
-   print(result["text"])
-   ```
-
-2. کد را اجرا کنید تا متن فایل صوتی شما تولید شود.
-
----
-
-## **توضیحات پایانی**
-Whisper یک ابزار بسیار قوی و انعطاف‌پذیر برای تبدیل صوت به متن است و از زبان‌های مختلف (مثل فارسی) پشتیبانی می‌کند. با تنظیمات مناسب، می‌توانید آن را به پروژه‌های مختلف خود اضافه کنید.
+## مقایسه دو روش
+- **استفاده از فانکشن‌ها**: مناسب برای ادغام با محیط‌های توسعه‌محور مثل Playground.  
+- **بدون استفاده از فانکشن‌ها**: انعطاف‌پذیری بیشتر در سرورهای مستقل.  
